@@ -6,9 +6,7 @@ let potBuffer: AudioBuffer | null = null;
 let chalkBuffer: AudioBuffer | null = null;
 let welcomeBuffer: AudioBuffer | null = null;
 
-let loadingPromise: Promise<void> | null = null;
-
-// Works in dev + GitHub Pages + TWA/APK
+// Works for dev + GitHub Pages + APK
 const BASE = import.meta.env.BASE_URL;
 
 const SOUND_FILES = {
@@ -18,107 +16,214 @@ const SOUND_FILES = {
   welcome: `${BASE}audio/welcome-sound.mp3`,
 };
 
-const loadBuffer = async (ctx: AudioContext, url: string): Promise<AudioBuffer | null> => {
+const safeDecode = async (ctx: AudioContext, url: string): Promise<AudioBuffer | null> => {
   try {
-    const res = await fetch(url, { cache: 'no-cache' });
+    const res = await fetch(url, { cache: "no-cache" });
+
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    // If SW/404 returns index.html, content-type will be text/html
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("audio") && !ct.includes("mpeg") && !ct.includes("mp3")) {
+      // Read a tiny bit for debugging (optional)
+      throw new Error(`Not audio content-type: "${ct}" for ${url}`);
+    }
+
     const data = await res.arrayBuffer();
     return await ctx.decodeAudioData(data);
-  } catch (e) {
-    console.warn('[audio] failed to load:', url, e);
+  } catch (err) {
+    console.warn("[audio] Failed to load:", url, err);
     return null;
   }
 };
 
-// Call this from user gesture (click/tap). Safe to call multiple times.
 export const initAudio = async () => {
   if (!audioCtx) {
-    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return null;
+    audioCtx = new AudioContextClass();
   }
 
-  if (audioCtx.state === 'suspended') {
-    await audioCtx.resume().catch(() => {});
+  if (audioCtx.state === "suspended") {
+    await audioCtx.resume();
   }
 
-  // Load only once (avoid repeated fetch/decode)
-  if (!loadingPromise) {
-    loadingPromise = (async () => {
-      collisionBuffer = await loadBuffer(audioCtx!, SOUND_FILES.collision);
-      potBuffer = await loadBuffer(audioCtx!, SOUND_FILES.pot);
-      chalkBuffer = await loadBuffer(audioCtx!, SOUND_FILES.chalk);
-      welcomeBuffer = await loadBuffer(audioCtx!, SOUND_FILES.welcome);
-    })();
+  // Preload once (but do not crash if any file fails)
+  if (!collisionBuffer && !potBuffer && !chalkBuffer && !welcomeBuffer) {
+    const [c, p, ch, w] = await Promise.all([
+      safeDecode(audioCtx, SOUND_FILES.collision),
+      safeDecode(audioCtx, SOUND_FILES.pot),
+      safeDecode(audioCtx, SOUND_FILES.chalk),
+      safeDecode(audioCtx, SOUND_FILES.welcome),
+    ]);
+
+    collisionBuffer = c;
+    potBuffer = p;
+    chalkBuffer = ch;
+    welcomeBuffer = w;
   }
 
-  await loadingPromise;
   return audioCtx;
 };
 
-export const playCollisionSound = (impact: number) => {
-  if (!audioCtx || !collisionBuffer || impact < 0.02) return;
+// ---------- FALLBACK SYNTHS (only used if mp3 not loading) ----------
 
-  const src = audioCtx.createBufferSource();
-  const gain = audioCtx.createGain();
-  const filter = audioCtx.createBiquadFilter();
+const playSynthCollision = (ctx: AudioContext, impact: number) => {
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
 
-  src.buffer = collisionBuffer;
-  src.playbackRate.value = 0.95 + Math.random() * 0.1;
+  osc.connect(gain);
+  gain.connect(ctx.destination);
 
-  filter.type = 'lowpass';
-  filter.frequency.value = 800 + impact * 14000;
+  osc.frequency.setValueAtTime(2000 + Math.random() * 200, t);
+  osc.frequency.exponentialRampToValueAtTime(500, t + 0.1);
 
-  gain.gain.value = Math.min(Math.pow(impact, 0.8), 1.2);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.linearRampToValueAtTime(Math.min(Math.max(impact, 0.05), 1), t + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+
+  osc.start(t);
+  osc.stop(t + 0.12);
+};
+
+const playSynthPot = (ctx: AudioContext) => {
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.type = "square";
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.frequency.setValueAtTime(120, t);
+  osc.frequency.exponentialRampToValueAtTime(40, t + 0.18);
+
+  gain.gain.setValueAtTime(0.35, t);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+
+  osc.start(t);
+  osc.stop(t + 0.25);
+};
+
+const playSynthChalk = (ctx: AudioContext) => {
+  const t = ctx.currentTime;
+  const bufferSize = Math.floor(ctx.sampleRate * 0.25);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+
+  for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.25;
+
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.value = 1500;
+  filter.Q.value = 1;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.linearRampToValueAtTime(0.22, t + 0.03);
+  gain.gain.linearRampToValueAtTime(0.0001, t + 0.22);
 
   src.connect(filter);
   filter.connect(gain);
-  gain.connect(audioCtx.destination);
+  gain.connect(ctx.destination);
 
-  src.start();
+  src.start(t);
+};
+
+const playBuffer = (ctx: AudioContext, buf: AudioBuffer, volume = 1, rate = 1) => {
+  const src = ctx.createBufferSource();
+  const gain = ctx.createGain();
+
+  src.buffer = buf;
+  src.playbackRate.value = rate;
+
+  gain.gain.value = volume;
+
+  src.connect(gain);
+  gain.connect(ctx.destination);
+
+  src.start(0);
+  return src;
+};
+
+// ---------- PUBLIC API ----------
+
+export const playCollisionSound = (impact: number) => {
+  if (!audioCtx) return;
+  if (impact < 0.02) return;
+
+  if (collisionBuffer) {
+    const pitchRandom = 0.95 + Math.random() * 0.1;
+    const rate = pitchRandom + impact * 0.05;
+
+    // Filter to make soft hits dull, hard hits bright
+    const src = audioCtx.createBufferSource();
+    src.buffer = collisionBuffer;
+    src.playbackRate.value = rate;
+
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 800 + Math.pow(impact, 0.5) * 15000;
+
+    const gain = audioCtx.createGain();
+    gain.gain.value = Math.min(Math.pow(impact, 0.8), 1.2);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    src.start(0);
+  } else {
+    playSynthCollision(audioCtx, impact);
+  }
 };
 
 export const playPotSound = () => {
-  if (!audioCtx || !potBuffer) return;
+  if (!audioCtx) return;
 
-  const src = audioCtx.createBufferSource();
-  const gain = audioCtx.createGain();
-
-  src.buffer = potBuffer;
-  src.playbackRate.value = 0.98 + Math.random() * 0.04;
-  gain.gain.value = 0.8;
-
-  src.connect(gain);
-  gain.connect(audioCtx.destination);
-  src.start();
+  if (potBuffer) {
+    playBuffer(audioCtx, potBuffer, 0.8, 0.98 + Math.random() * 0.04);
+  } else {
+    playSynthPot(audioCtx);
+  }
 };
 
 export const playChalkSound = () => {
-  if (!audioCtx || !chalkBuffer) return;
+  if (!audioCtx) return;
 
-  const src = audioCtx.createBufferSource();
-  const gain = audioCtx.createGain();
-
-  src.buffer = chalkBuffer;
-  gain.gain.value = 0.6;
-
-  src.connect(gain);
-  gain.connect(audioCtx.destination);
-  src.start();
+  if (chalkBuffer) {
+    playBuffer(audioCtx, chalkBuffer, 0.6, 1);
+  } else {
+    playSynthChalk(audioCtx);
+  }
 };
 
-// Promise-based to match your existing playWelcomeAudio().then(...)
-export const playWelcomeAudio = (): Promise<void> => {
-  return new Promise((resolve) => {
-    if (!audioCtx || !welcomeBuffer) return resolve();
+export const playWelcomeAudio = async (): Promise<void> => {
+  // Ensure context exists and is resumed (but do NOT force user click here)
+  if (!audioCtx) return;
 
-    const src = audioCtx.createBufferSource();
-    src.buffer = welcomeBuffer;
-    src.connect(audioCtx.destination);
+  if (welcomeBuffer) {
+    await new Promise<void>((resolve) => {
+      const src = playBuffer(audioCtx!, welcomeBuffer!, 1, 1);
+      src.onended = () => resolve();
+    });
+    return;
+  }
 
-    src.onended = () => resolve();
-    try {
-      src.start();
-    } catch {
-      resolve();
-    }
-  });
+  // If mp3 failed, fall back to TTS
+  if ("speechSynthesis" in window) {
+    await new Promise<void>((resolve) => {
+      const text = "Welcome to AZ Snooker Master. Thank you guys, ready for first frame? Let's play";
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 0.95;
+      u.volume = 1.0;
+      u.onend = () => resolve();
+      u.onerror = () => resolve();
+      window.speechSynthesis.speak(u);
+    });
+  }
 };
