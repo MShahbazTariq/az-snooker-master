@@ -1,0 +1,6 @@
+/* Required placeholder for Vite build */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}

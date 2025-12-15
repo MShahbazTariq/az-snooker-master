@@ -1,0 +1,5 @@
+{
+  "name": "AZ Snooker Master",
+  "description": "A high-fidelity 2D snooker simulation featuring a custom physics engine, realistic elastic collisions, and smooth canvas rendering.",
+  "requestFramePermissions": []
+}
