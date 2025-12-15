@@ -1,1 +1,0 @@
-if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/az-snooker-master/sw.js', { scope: '/az-snooker-master/' })})}
