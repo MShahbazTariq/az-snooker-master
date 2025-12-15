@@ -1755,7 +1755,7 @@ export const SnookerGame: React.FC = () => {
                 </div>
                 <div className="w-16 md:w-24 h-1 bg-gradient-to-r from-transparent via-emerald-500 to-transparent my-2 md:my-4"></div>
                 <button 
-                    onClick={() => { initAudio(); setGameState(GameState.MENU); }}
+                    onClick={async () => { await initAudio(); setGameState(GameState.MENU); }}
                     className="group relative px-6 py-3 md:px-10 md:py-4 bg-transparent overflow-hidden rounded-full transition-all duration-300 hover:scale-105 active:scale-95"
                 >
                     <div className="absolute inset-0 w-full h-full bg-gradient-to-r from-emerald-600 to-cyan-700 opacity-80 group-hover:opacity-100 transition-opacity"></div>
@@ -1955,8 +1955,8 @@ export const SnookerGame: React.FC = () => {
                   </div>
                   <div className="mt-4 flex gap-4">
                       <button 
-                          onClick={() => {
-                              initAudio();
+                          onClick={async () => {
+                              await initAudio();
                               setBalls(setupBalls(TABLE_CONFIG));
                               setScoreP1(0); setScoreP2(0);
                               currentBreakRef.current = 0;
